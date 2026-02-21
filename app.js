@@ -1,107 +1,231 @@
-const obs = new OBSWebSocket();
-
+// OBS websocket connection information
 const connectionDetails = {
     url: 'ws://127.0.0.1:4455', // Replace with your OBS IP and port
     password: ''  // Replace with your OBS password
 };
 
-// Connect to OBS Studio
-obs.connect(connectionDetails["url"], connectionDetails["password"])
-    .then(() => {
-        console.log('OBS is connected!');
-    })
-    .catch(err => {
-        console.error('Failed to connect to OBS:', err);
+// how often to save the timer state to localStorage in milliseconds
+let saveInterval = 60000;
+
+// enable debug logging
+let debug = false;
+
+
+// END of user editable stuff..
+
+const myWorker = new Worker('worker.js');
+try {
+
+    const obs = new OBSWebSocket();
+
+    // Connect to OBS Studio
+    obs.connect(connectionDetails["url"], connectionDetails["password"])
+        .then(() => {
+            if (debug) {
+                console.log('OBS is connected!');
+            }
+        })
+        .catch(err => {
+            console.error('Failed to connect to OBS:', err);
+        });
+
+    obs.on('VendorEvent', (data) => {
+        if (data["eventData"]["message"] == "StopwatchStop") {
+            pauseTimer();
+            if (debug) {
+                console.log('StopwatchStop Message Received.');
+            }
+        } else if (data["eventData"]["message"] == "StopwatchStart") {
+            startTimer();
+            if (debug) {
+                console.log('StopwatchStart Message Received.');
+            }
+        } else if (data["eventData"]["message"] == "StopwatchReset") {
+            resetTimer();
+            if (debug) {
+                console.log('StopwatchReset Message Received.');
+            }
+        }
     });
 
-obs.on('ConnectionOpened', () => {
-    console.log('WebSocket connection opened.');
-});
+    obs.on('error', (err) => {
+        console.error('OBS WebSocket error:', err);
+    });
+} catch (e) {
+    console.error('Error initializing WebSockets:', e);
+}
 
-obs.on('ConnectionClosed', () => {
-    console.log('WebSocket connection closed.');
-});
+//
+let uiData = { h: 0, m: 0, s: 0 };
+let nextSaveTime = Date.now() + saveInterval;
 
-obs.on('VendorEvent', (data) => {
-    if (data["eventData"]["message"] == "StopwatchStop") {
-        console.log('StopwatchStop Message Received.');
-        pauseTimer();
-    } else if (data["eventData"]["message"] == "StopwatchStart") {
-        console.log('StopwatchStart Message Received.');
-        startTimer();
-    } else if (data["eventData"]["message"] == "StopwatchReset") {
-        console.log('StopwatchReset Message Received.');
-        resetTimer();
-    }
-});
+let timerData = { elapsed: 0, start: Date.now() };
+let timerState = { active: false };
 
-obs.on('error', (err) => {
-    console.error('OBS WebSocket error:', err);
-});
+function updateUI() {
+    let outputStr = `${uiData.h}`.padStart(2, "0") + ":" + `${uiData.m}`.padStart(2, "0") + ":" + `${uiData.s}`.padStart(2, "0");
+    document.querySelector('.stopwatch').innerHTML = outputStr;
+}
 
-// track total number of seconds passed
-let elapsedTime = 0;
-// track the current date time so we can use it to track seconds passing..
-let startTime = 0;
-// track timerId so we can stop it later
-let timerId = 0;
-
-function timekeeper() {
-    // timers in JS are not guaranteed to run at the exact time, so for accurate time keeping
-    // you have to use Date.now() and calculate the elapsed time
-
-    // get the number of milliseconds that have passed since we last started..
-    elapsedTime = Date.now() - startTime;
-
+function updateUIData() {
     let h, m, s;
-    h = Math.floor(elapsedTime / 1000 / 60 / 60);
-    m = Math.floor((elapsedTime / 1000 / 60 / 60 - h) * 60);
-    s = Math.floor(((elapsedTime / 1000 / 60 / 60 - h) * 60 - m) * 60);
+    h = Math.floor(timerData.elapsed / 3600000);
+    m = Math.floor((timerData.elapsed / 3600000 - h) * 60);
+    s = Math.floor(((timerData.elapsed / 3600000 - h) * 60 - m) * 60);
+    uiData = { h: h, m: m, s: s };
+}
 
-    if (h <= 9) {
-        h = "0" + h;
+myWorker.onmessage = function (e) {
+    if (e.data.type === 'elapsedTime') {
+        // update our local values
+        timerData.elapsed = e.data.value;
+        timerData.start = e.data.start;
+        // decide when to update localStore
+        if (Date.now() >= nextSaveTime) {
+            saveTimerData();
+            nextSaveTime = Date.now() + saveInterval;
+        }
+        // schedule UI update..
+        updateUIData();
+        requestAnimationFrame(updateUI);
     }
-
-    if (m <= 9) {
-        m = "0" + m;
-    }
-
-    if (s <= 9) {
-        s = "0" + s;
-    }
-
-    document.querySelector('.stopwatch').innerHTML = `${h}:${m}:${s}`;
 }
 
 function startTimer() {
-    startTime = Date.now() - elapsedTime;
-    timerId = setInterval(timekeeper, 500);
+    myWorker.postMessage({ type: 'start' });
+    timerState.active = true;
+    saveTimerState();
     document.getElementById("paused").classList.add("hidden");
 }
 
-function pauseTimer() {
-    clearInterval(timerId);
-    timerId = 0;
+function stopTimer() {
+    myWorker.postMessage({ type: 'stop' });
+    timerState.active = false;
+    saveTimerState();
     document.getElementById("paused").classList.remove("hidden");
 }
 
-function resetTimer() {
-    elapsedTime = 0;
-    startTime = Date.now();
-    timekeeper();
+async function resetTimer() {
+    myWorker.postMessage({ type: 'reset' });
+    timerData.elapsed = 0;
+    timerData.start = Date.now();
+    updateUIData();
+    requestAnimationFrame(updateUI);
+    saveTimerData({ available: false });
 }
+
+async function saveTimerData({ available = true } = {}) {
+    await navigator.locks.request(
+        "timerData",
+        { ifAvailable: available },
+        async (lock) => {
+            if (!lock) {
+                return;
+            }
+            localStorage.setItem("timerData", JSON.stringify(timerData));
+            if (debug) {
+                console.debug("Saved timerData:", timerData);
+            }
+        }
+    );
+}
+
+async function saveTimerState() {
+    await navigator.locks.request(
+        "timerState",
+        { ifAvailable: true },
+        async (lock) => {
+            if (!lock) {
+                return;
+            }
+            localStorage.setItem("timerState", JSON.stringify(timerState));
+            if (debug) {
+                console.debug("Saved timerState:", timerState);
+            }
+        }
+    );
+}
+
+addEventListener("storage", async (e) => {
+    if (e.key === 'timerData') {
+        timerData = JSON.parse(e.newValue);
+        myWorker.postMessage({
+            type: 'load',
+            value: timerData.elapsed,
+            start: timerData.start
+        });
+        updateUIData();
+        requestAnimationFrame(updateUI);
+    } else if (e.key === 'timerState') {
+        timerState = JSON.parse(e.newValue);
+        if (timerState.active) {
+            myWorker.postMessage({ type: 'start' });
+            document.getElementById("paused").classList.add("hidden");
+        } else {
+            myWorker.postMessage({ type: 'stop' });
+            document.getElementById("paused").classList.remove("hidden");
+        }
+    }
+});
 
 // key handler.. to pause / unpause / reset
 document.addEventListener('keydown', function (event) {
     if (event.key == " ") {
-        if (timerId == 0) {
-            startTimer();
+        if (timerState.active) {
+            stopTimer();
         } else {
-            pauseTimer();
+            startTimer();
         }
     } else if (event.key == "r") {
         resetTimer();
     }
 });
 
-startTimer();
+let loadedTimerData = null;
+(async () => {
+    await navigator.locks.request(
+        "timerData",
+        { mode: "shared" },
+        async (lock) => {
+            loadedTimerData = localStorage.getItem("timerData");
+            if (loadedTimerData !== null) {
+                timerData = JSON.parse(loadedTimerData);
+                myWorker.postMessage({
+                    type: 'load',
+                    value: timerData.elapsed,
+                    start: timerData.start
+                });
+                updateUIData();
+                requestAnimationFrame(updateUI);
+                if (debug) {
+                    console.debug("Loaded timerData:", timerData);
+                }
+            } else {
+                timerData.start = Date.now();
+            }
+        }
+    );
+})();
+
+let loadedTimerState = null;
+(async () => {
+    await navigator.locks.request(
+        "timerState",
+        { mode: "shared" },
+        async (lock) => {
+            loadedTimerState = localStorage.getItem("timerState");
+            if (loadedTimerState !== null) {
+                timerState = JSON.parse(loadedTimerState);
+                if (timerState.active) {
+                    myWorker.postMessage({ type: 'start' });
+                    document.getElementById("paused").classList.add("hidden");
+                } else {
+                    myWorker.postMessage({ type: 'stop' });
+                    document.getElementById("paused").classList.remove("hidden");
+                }
+            } else {
+                startTimer();
+            }
+        }
+    );
+})();
