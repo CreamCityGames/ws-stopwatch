@@ -4,6 +4,7 @@
     "obs-websocket-js": "^5.0.7"
   },
   "scripts": {
-    "start": "./node_modules/http-server/bin/http-server ./"
+    "start": "./node_modules/http-server/bin/http-server ./",
+    "winstart": "node .\\node_modules\\http-server\\bin\\http-server .\\"
   }
 }

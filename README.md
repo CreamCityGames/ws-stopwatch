@@ -44,13 +44,19 @@ const connectionDetails = {
 
 Web Workers require an actual web server, this project uses http-server to provide one, you can start it with the following command.
 
-### Via pnpm
-`pnpm run start`
+### Running
 
-### Via npm
-`npm run start`
+- Linux / MacOS
+  - pnpm - `pnpm run start`
+  - npm - `npm run start`
 
-Add the server url as a browser source. `http://127.0.0.1:8080`
+- Windows
+  - pnpm - `pnpm run winstart`
+  - npm - `npm run winstart`
+
+### Adding Browser Source
+
+Add the server url as a browser source. `http://127.0.0.1:8080/ws-stopwatch.html`
 
 ![OBS Browser Source](/../screenshots/screenshots/stopwatch-source-example.webp?raw=true "OBS Browser Source")
 

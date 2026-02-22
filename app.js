@@ -31,7 +31,7 @@ try {
 
     obs.on('VendorEvent', (data) => {
         if (data["eventData"]["message"] == "StopwatchStop") {
-            pauseTimer();
+            stopTimer();
             if (debug) {
                 console.log('StopwatchStop Message Received.');
             }
